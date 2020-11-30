@@ -390,7 +390,6 @@ Component.__index = function(self, key)
         print_error("Illegal Component ID")
         return 0
     end
-    if key ~= "gun_config" then print(key) end
     if comp_getters_special[self:type()] and comp_getters_special[self:type()][key] then
         return comp_getters_special[self:type()][key](self.__id, key)
     else
