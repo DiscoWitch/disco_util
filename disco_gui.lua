@@ -25,11 +25,13 @@ end
 
 ---@class GUIElement
 local GUIElement = {}
+GUIElement.__tostring = function(self) return "GUIElement" end
+GUIElement.__index = GUIElement
 ---@param x number
 ---@param y number
 ---@return GUIElement
 function GUIElement:Create(x, y)
-    local output = {x = x, y = y, enabled = true, options = {}}
+    local output = {x = x, y = y, enabled = true, data = {}, options = {}}
     output.options[GUI_OPTION.NoPositionTween] = true
     return output
 end
@@ -43,21 +45,22 @@ function GUIElement:applyModifiers()
     end
     if self.true_z then GuiZSetForNextWidget(gui, self.true_z) end
 end
+function GUIElement:_update() if self.update then self:update() end end
 ---@param px number
 ---@param py number
-function GUIElement:preRender(px, py)
+function GUIElement:updatePosition(px, py, pz)
     if not self.enabled then return end
     if self.id then self.root.used_ids[self.id] = true end
     self.true_x = self.x + px
     self.true_y = self.y + py
-    self.true_z = self.parent.true_z + (self.z or -0.1)
-    if self.tooltip then self.tooltip:preRender(self.true_x, self.true_y) end
+    self.true_z = pz + (self.z or -0.1)
+    if self.tooltip then self.tooltip:updatePosition(self.true_x, self.true_y, self.true_z) end
 end
 function GUIElement:render() print_error("called virtual render function") end
 function GUIElement:postRender()
     local gui = self.root.handle
     self.last_render_data = GetWidgetInfoPacked(gui)
-    if self.last_render_data and self.last_render_data.hovered == 1 then
+    if self.last_render_data and self.last_render_data.hovered then
         if self.tooltip then self.tooltip:render() end
     end
 end
@@ -74,38 +77,46 @@ function GUIElement:getAABB()
     }
 end
 
----@class GUIParent
-local GUIParent = {}
-setmetatable(GUIParent, {__index = GUIElement})
+---@class GUIContainer
+local GUIContainer = {}
+setmetatable(GUIContainer, {__index = GUIElement})
 ---@param x number
 ---@param y number
----@return GUIParent
-function GUIParent:Create(x, y)
+---@return GUIContainer
+function GUIContainer:Create(x, y)
     local output = GUIElement:Create(x, y)
     output.children = {}
     return output
 end
+function GUIContainer:addChild(child) table.insert(self.children, child) end
 ---@return table old_children
-function GUIParent:clearChildren()
+function GUIContainer:clearChildren()
     local old_children = self.children
     self.children = {}
     return old_children
 end
+function GUIContainer:_update()
+    if self.update then self:update() end
+    if self.children then for k, v in ipairs(self.children) do v:_update() end end
+end
+
 ---@param px number
 ---@param py number
-function GUIParent:preRender(px, py)
+function GUIContainer:updatePosition(px, py, pz)
     if not self.enabled then return end
-    GUIElement.preRender(self, px, py)
+    GUIElement.updatePosition(self, px, py, pz)
     if self.children then
-        for k, v in ipairs(self.children) do v:preRender(self.true_x, self.true_y) end
+        for k, v in ipairs(self.children) do
+            v:updatePosition(self.true_x, self.true_y, self.true_z)
+        end
     end
 end
-function GUIParent:render()
+function GUIContainer:render()
     if not self.enabled then return end
     for k, v in ipairs(self.children) do v:render() end
 end
 ---@return AABB
-function GUIParent:getAABB()
+function GUIContainer:getAABB()
     if not self.enabled then return nil end
     local aabb = nil
     for k, v in ipairs(self.children) do
@@ -126,31 +137,38 @@ function GUIParent:getAABB()
     return aabb
 end
 
----@class Anchor
-local Anchor = {}
-setmetatable(Anchor, {__index = GUIParent})
-Anchor.__index = Anchor
+GUIContainer.__tostring = function(self)
+    local str = "GUIContainer with children:"
+    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    return str
+end
+GUIContainer.__index = GUIContainer
 ---@param x number
 ---@param y number
----@return Anchor
-function GUIParent:Anchor(x, y)
-    local output = GUIParent:Create(x, y)
+---@return GUIContainer
+function GUIContainer:GUIContainer(x, y)
+    local output = GUIContainer:Create(x, y)
     output.parent = self
     output.root = self.root
-    setmetatable(output, Anchor)
-    table.insert(self.children, output)
+    setmetatable(output, GUIContainer)
+    self:addChild(output)
     return output
 end
 
 ---@class DragContainer
 local DragContainer = {}
-setmetatable(DragContainer, {__index = GUIParent})
+setmetatable(DragContainer, {__index = GUIContainer})
+DragContainer.__tostring = function(self)
+    local str = "DragContainer with children:"
+    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    return str
+end
 DragContainer.__index = DragContainer
 
 ---@param px number
 ---@param py number
-function DragContainer:preRender(px, py)
-    GUIParent.preRender(self, px, py)
+function DragContainer:updatePosition(px, py, pz)
+    GUIContainer.updatePosition(self, px, py, pz)
     local mpos = self.root:GetMousePos()
     local aabb = self.aabb
     if aabb then
@@ -170,26 +188,32 @@ function DragContainer:preRender(px, py)
         self.x = mpos.x + self.drag_offset.x
         self.y = mpos.y + self.drag_offset.y
     end
+    GUIContainer.updatePosition(self, px, py, pz)
 end
 ---@param x number
 ---@param y number
 ---@param aabb AABB|nil
 ---@return DragContainer
-function GUIParent:DragContainer(x, y, aabb)
-    local output = GUIParent:Create()
+function GUIContainer:DragContainer(x, y, aabb)
+    local output = GUIContainer:Create()
     output.x = x
     output.y = y
     output.aabb = aabb
     output.parent = self
     output.root = self.root
     setmetatable(output, DragContainer)
-    table.insert(self.children, output)
+    self:addChild(output)
     return output
 end
 
 ---@class AutoBox
 local AutoBox = {}
-setmetatable(AutoBox, {__index = GUIParent})
+setmetatable(AutoBox, {__index = GUIContainer})
+AutoBox.__tostring = function(self)
+    local str = "AutoBox with children:"
+    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    return str
+end
 AutoBox.__index = AutoBox
 function AutoBox:render()
     if not self.enabled then return end
@@ -206,8 +230,11 @@ function AutoBox:render()
     end
     if aabb then
         self:applyModifiers()
-        GuiImageNinePiece(gui, id, aabb[1], aabb[3], aabb[2] - aabb[1], aabb[4] - aabb[3], alpha,
-                          sprite, sprite_highlight)
+        local left = aabb[1] - self.margins[1]
+        local top = aabb[3] - self.margins[3]
+        local width = aabb[2] + self.margins[2] - left
+        local height = aabb[4] + self.margins[4] - top
+        GuiImageNinePiece(gui, id, left, top, width, height, alpha, sprite, sprite_highlight)
         self:postRender()
     end
     for _, v in ipairs(self.children) do v:render() end
@@ -218,19 +245,207 @@ end
 ---@param aabb AABB|nil
 ---@param id integer|nil
 ---@return AutoBox
-function GUIParent:AutoBox(x, y, sprite, aabb, id)
-    local output = GUIParent:Create(x, y)
+function GUIContainer:AutoBox(x, y, sprite, aabb, id)
+    local output = GUIContainer:Create(x, y)
     output.sprite = sprite
     output.aabb = aabb
+    output.margins = {0, 0, 0, 0}
     output.parent = self
     output.root = self.root
     setmetatable(output, AutoBox)
-    table.insert(self.children, output)
+    self:addChild(output)
     return output
 end
+
+---@class GridBox
+local GridBox = {}
+setmetatable(GridBox, {__index = GUIContainer})
+GridBox.__tostring = function(self)
+    local str = "GridBox with children:"
+    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    return str
+end
+GridBox.__index = GridBox
+---@param px number
+---@param py number
+function GridBox:updatePosition(px, py, pz)
+    if not self.enabled then return end
+    GUIElement.updatePosition(self, px, py, pz)
+    if self.children then
+        local edge_x = self.true_x
+        local edge_y = self.true_y
+        local sep_x = self.separation_x or 0
+        local sep_y = self.separation_y or 0
+        if self.vertical then
+            local col_width = 0
+            for k, v in ipairs(self.children) do
+                if v.enabled then
+                    v:updatePosition(edge_x, edge_y, self.true_z)
+                    local aabb = v:getAABB() or {0, 0, 0, 0}
+                    local width = aabb[2] - aabb[1]
+                    local height = aabb[4] - aabb[3]
+                    edge_y = edge_y + height + sep_y
+                    if self.max_length and edge_y - self.true_y > self.max_length then
+                        edge_y = self.true_y
+                        edge_x = edge_x + col_width + sep_x
+                        col_width = 0
+                        v:updatePosition(edge_x, edge_y, self.true_z)
+                        edge_y = self.true_y + height + sep_y
+                    end
+                    if width > col_width then col_width = width end
+                end
+            end
+        else
+            local row_height = 0
+            for k, v in ipairs(self.children) do
+                if v.enabled then
+                    v:updatePosition(edge_x, edge_y, self.true_z)
+                    local aabb = v:getAABB() or {0, 0, 0, 0}
+                    local width = aabb[2] - aabb[1]
+                    local height = aabb[4] - aabb[3]
+                    edge_x = edge_x + width + sep_x
+                    if self.max_length and edge_x - self.true_x > self.max_length + 1 then
+                        edge_x = self.true_x
+                        edge_y = edge_y + row_height + sep_y
+                        row_height = 0
+                        v:updatePosition(edge_x, edge_y, self.true_z)
+                        edge_x = self.true_x + width + sep_x
+                    end
+                    if height > row_height then row_height = height end
+                end
+            end
+        end
+    end
+end
+---@param x number
+---@param y number
+---@param vertical boolean
+---@param max_length number|nil
+---@param separation_x number|nil
+---@param separation_y number|nil
+---@return GridBox
+function GUIContainer:GridBox(x, y, vertical, max_length, separation_x, separation_y)
+    local output = GUIContainer:Create(x, y)
+    output.max_length = max_length
+    output.separation_x = separation_x
+    output.separation_y = separation_y
+    output.vertical = vertical
+    output.parent = self
+    output.root = self.root
+    setmetatable(output, GridBox)
+    self:addChild(output)
+    return output
+end
+
+---@class Alias
+local Alias = {}
+setmetatable(Alias, {__index = GUIElement})
+Alias.__tostring = function(self) return "Alias: " .. tostring(self.original) end
+Alias.__index = function(self, key)
+    if self.original[key] then
+        return self.original[key]
+    else
+        return Alias[key]
+    end
+end
+function Alias:render()
+    -- render as original
+end
+---@return AABB
+function Alias:getAABB()
+    -- Get original's bounding box
+end
+function Alias.Create(x, y, original, parent, instance_index)
+    local output = GUIElement:Create(x, y)
+    output.options = nil
+    output.original = original
+    output.instance_index = instance_index
+    if original.children then
+        output.children = {}
+        for k, v in ipairs(original.children) do
+            local clone = Alias.Create(v.x, v.y, v, output, instance_index)
+            table.insert(output.children, clone)
+        end
+    end
+    output.parent = parent
+    output.root = parent.root
+    setmetatable(output, Alias)
+    return output
+end
+---@param x number
+---@param y number
+---@param original GUIElement
+---@return Alias
+function GUIContainer:Alias(x, y, original)
+    local output = Alias:Create(x, y, original, self)
+    self:addChild(output)
+    return output
+end
+
+---@class GridBoxInstanced
+local GridBoxInstanced = {}
+setmetatable(GridBoxInstanced, {__index = GridBox})
+GridBoxInstanced.__tostring = function(self)
+    local str = "GridBox with instanced children:"
+    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    return str
+end
+GridBoxInstanced.__index = function(self, key)
+    if key == "children" then
+        -- Do instancing logic
+        if self.count ~= self.real_count or self.update_children then
+            -- Update instances
+            self.children_instanced = {}
+            for i = 1, self.count do
+                for k, v in ipairs(self._children) do
+                    local clone = Alias.Create(0, 0, v, self, i)
+                    table.insert(self.children_instanced, clone)
+                end
+            end
+            self.real_count = self.count
+            self.update_children = false
+        end
+        return self.children_instanced
+    end
+    return GridBoxInstanced[key]
+end
+---@return table children
+function GridBoxInstanced:clearChildren()
+    local old_children = self._children
+    self._children = {}
+    return old_children
+end
+---@param child GUIElement
+function GridBoxInstanced:addChild(child)
+    table.insert(self._children, child)
+    self.update_children = true
+end
+
+---@param x number
+---@param y number
+---@param count number
+---@param vertical boolean|nil
+---@param max_length number|nil
+---@return GridBox
+function GUIContainer:GridBoxInstanced(x, y, count, vertical, max_length)
+    local output = GUIContainer:Create(x, y)
+    output._children = {}
+    output.children = nil
+    self.update_children = true
+    output.max_length = max_length
+    output.count = count
+    output.vertical = vertical or false
+    output.parent = self
+    output.root = self.root
+    setmetatable(output, GridBoxInstanced)
+    self:addChild(output)
+    return output
+end
+
 ---@class Text
 local Text = {}
 setmetatable(Text, {__index = GUIElement})
+Text.__tostring = function(self) return "Text: " .. self.text end
 Text.__index = Text
 function Text:render()
     if not self.enabled then return end
@@ -243,13 +458,13 @@ end
 ---@param y number
 ---@param text string
 ---@return Text
-function GUIParent:Text(x, y, text)
+function GUIContainer:Text(x, y, text)
     local output = GUIElement:Create(x, y)
     output.text = text or ""
     output.parent = self
     output.root = self.root
     setmetatable(output, Text)
-    table.insert(self.children, output)
+    self:addChild(output)
     return output
 end
 ---@return AABB
@@ -268,6 +483,7 @@ end
 ---@class Button
 local Button = {}
 setmetatable(Button, {__index = GUIElement})
+Button.__tostring = function(self) return "Button: " .. self.text end
 Button.__index = Button
 function Button:render()
     if not self.enabled then return end
@@ -276,22 +492,22 @@ function Button:render()
     local gui = self.root.handle
     local clicked, rclicked = GuiButton(gui, id, self.true_x, self.true_y, self.text)
     GUIElement.postRender(self)
-    if clicked and self.on_click then self.on_click() end
-    if rclicked and self.on_right_click then self.on_right_click() end
+    if clicked and self.on_click then self:on_click() end
+    if rclicked and self.on_right_click then self:on_right_click() end
 end
 ---@param x number
 ---@param y number
 ---@param text string|nil
 ---@param id integer|nil
 ---@return Button
-function GUIParent:Button(x, y, text, id)
+function GUIContainer:Button(x, y, text, id)
     local output = GUIElement:Create(x, y)
     output.text = text or ""
     output.id = id
     output.parent = self
     output.root = self.root
     setmetatable(output, Button)
-    table.insert(self.children, output)
+    self:addChild(output)
     return output
 end
 ---@return AABB
@@ -310,6 +526,7 @@ end
 ---@class Image
 local Image = {}
 setmetatable(Image, {__index = GUIElement})
+Image.__tostring = function(self) return "Image: " .. self.sprite end
 Image.__index = Image
 function Image:render()
     if not self.enabled then return end
@@ -334,7 +551,7 @@ end
 ---@param sprite string|nil
 ---@param id integer|nil
 ---@return Image
-function GUIParent:Image(x, y, sprite, id)
+function GUIContainer:Image(x, y, sprite, id)
     local output = GUIElement:Create(x, y)
     output.centered = true
     output.sprite = sprite
@@ -342,7 +559,7 @@ function GUIParent:Image(x, y, sprite, id)
     output.parent = self
     output.root = self.root
     setmetatable(output, Image)
-    table.insert(self.children, output)
+    self:addChild(output)
     return output
 end
 ---@return AABB
@@ -361,6 +578,7 @@ end
 ---@class ImageButton
 local ImageButton = {}
 setmetatable(ImageButton, {__index = GUIElement})
+ImageButton.__tostring = function(self) return "ImageButton: " .. self.sprite end
 ImageButton.__index = ImageButton
 function ImageButton:render()
     if not self.enabled then return end
@@ -376,15 +594,15 @@ function ImageButton:render()
     end
     local clicked, rclicked = GuiImageButton(gui, id, x, y, self.text, self.sprite)
     GUIElement.postRender(self)
-    if clicked and self.on_click then self.on_click() end
-    if rclicked and self.on_right_click then self.on_right_click() end
+    if clicked and self.on_click then self:on_click() end
+    if rclicked and self.on_right_click then self:on_right_click() end
 end
 ---@param x number
 ---@param y number
 ---@param sprite string
 ---@param id integer|nil
 ---@return ImageButton
-function GUIParent:ImageButton(x, y, sprite, id)
+function GUIContainer:ImageButton(x, y, sprite, id)
     local output = GUIElement:Create(x, y)
     output.centered = true
     output.text = ""
@@ -393,7 +611,7 @@ function GUIParent:ImageButton(x, y, sprite, id)
     output.parent = self
     output.root = self.root
     setmetatable(output, ImageButton)
-    table.insert(self.children, output)
+    self:addChild(output)
     return output
 end
 function ImageButton:getAABB()
@@ -410,14 +628,19 @@ end
 
 ---@class Tooltip
 local Tooltip = {}
-setmetatable(Tooltip, {__index = GUIParent})
+setmetatable(Tooltip, {__index = GUIContainer})
+Tooltip.__tostring = function(self)
+    local str = "Tooltip with children:"
+    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    return str
+end
 Tooltip.__index = Tooltip
 -- function Tooltip:render() if not self.enabled then return end end
 ---@return Tooltip
 function GUIElement:Tooltip(x, y)
     x = x or 20
     y = y or 0
-    local output = GUIParent:Create(x, y)
+    local output = GUIContainer:Create(x, y)
     output.parent = self
     output.root = self.root
     setmetatable(output, Tooltip)
@@ -427,7 +650,7 @@ end
 
 ---@class GUI
 local GUI = {}
-setmetatable(GUI, {__index = GUIParent})
+setmetatable(GUI, {__index = GUIContainer})
 GUI.__tostring = function(self) return "GUI Root" end
 GUI.__index = GUI
 
@@ -467,11 +690,12 @@ function GUI:render()
     local status, err = pcall(function()
         GuiStartFrame(self.handle)
         self.true_z = self.z
-        for k, v in ipairs(self.children) do v:preRender(0, 0) end
+        for k, v in ipairs(self.children) do v:_update() end
+        for k, v in ipairs(self.children) do v:updatePosition(0, 0, 0) end
         for k, v in ipairs(self.children) do v:render() end
     end)
     if not status then
-        print("error while rendering")
+        print_error("error while rendering")
         print_error(tostring(err))
     end
 end
