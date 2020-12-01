@@ -282,6 +282,13 @@ end
 ---@param filename string
 ---@return Entity effect
 function Entity:addGameEffect(filename) return Entity(LoadGameEffectEntityTo(self.__id, filename)) end
+---@param material string|int
+---@param amount int
+---@return Entity effect
+function Entity:setMaterialCount(material, amount)
+    if type(material) == "number" then material = CellFactory_GetName(material) end
+    AddMaterialInventoryMaterial(self.__id, material, amount)
+end
 
 -- Physics functions
 ---@param fx number
@@ -355,7 +362,12 @@ local comp_getters_special = {
     DamageModelComponent = {damage_multipliers = MetaObject},
     ItemComponent = {inventory_slot = GetVec2},
     LaserEmitterComponent = {laser = MetaObject},
-    ParticleEmitterComponent = {mExPosition = GetVec2, offset = GetVec2, gravity = GetVec2},
+    ParticleEmitterComponent = {
+        mExPosition = GetVec2,
+        offset = GetVec2,
+        gravity = GetVec2,
+        area_circle_radius = GetVec2
+    },
     PhysicsBody2Component = {mLocalPosition = GetVec2},
     ProjectileComponent = {config_explosion = MetaObject},
     VelocityComponent = {mVelocity = GetVec2}
@@ -365,7 +377,12 @@ local comp_setters_special = {
     AnimalAIComponent = {mHomePosition = SetVec2},
     CharacterDataComponent = {mVelocity = SetVec2},
     ItemComponent = {inventory_slot = SetVec2},
-    ParticleEmitterComponent = {mExPosition = SetVec2, offset = SetVec2, gravity = SetVec2},
+    ParticleEmitterComponent = {
+        mExPosition = SetVec2,
+        offset = SetVec2,
+        gravity = SetVec2,
+        area_circle_radius = SetVec2
+    },
     VelocityComponent = {mVelocity = SetVec2}
 }
 

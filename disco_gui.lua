@@ -45,7 +45,34 @@ function GUIElement:applyModifiers()
     end
     if self.true_z then GuiZSetForNextWidget(gui, self.true_z) end
 end
-function GUIElement:_update() if self.update then self:update() end end
+function GUIElement:_on_click()
+    local test = self
+    while test ~= self.root do
+        if test.click_disabled then return end
+        test = test.parent
+    end
+    if self.on_click then self:on_click() end
+end
+function GUIElement:_on_right_click() if self.on_right_click then self:on_right_click() end end
+function GUIElement:_on_hover_start() if self.on_hover_start then self:on_hover_start() end end
+function GUIElement:_on_hover() if self.on_hover then self:on_hover() end end
+function GUIElement:_on_hover_end() if self.on_hover_end then self:on_hover_end() end end
+function GUIElement:_on_drag_start() if self.on_drag_start then self:on_drag_start() end end
+function GUIElement:_on_drag() if self.on_drag then self:on_drag() end end
+function GUIElement:_on_drag_end()
+    if (self.x - self.predrag_pos.x) ^ 2 + (self.y - self.predrag_pos.y) ^ 2 > 3 ^ 2 then
+        if self.on_drag_end then self:on_drag_end() end
+        self.click_disabled = true
+    else
+        self.x = self.predrag_pos.x
+        self.y = self.predrag_pos.y
+    end
+end
+function GUIElement:_update()
+    self.click_disabled = false
+    if self.update then self:update() end
+    if self.tooltip then self.tooltip:_update() end
+end
 ---@param px number
 ---@param py number
 function GUIElement:updatePosition(px, py, pz)
@@ -59,9 +86,17 @@ end
 function GUIElement:render() print_error("called virtual render function") end
 function GUIElement:postRender()
     local gui = self.root.handle
+    local prev_data = self.last_render_data
     self.last_render_data = GetWidgetInfoPacked(gui)
+    if self.last_render_data and self.last_render_data.clicked then self:_on_click() end
+    if self.last_render_data and self.last_render_data.right_clicked then self:_on_right_click() end
     if self.last_render_data and self.last_render_data.hovered then
+        table.insert(self.root.hovered, self)
+        if prev_data and not prev_data.hovered then self:_on_hover_start() end
+        self:_on_hover()
         if self.tooltip then self.tooltip:render() end
+    elseif prev_data and prev_data.hovered then
+        self:_on_hover_end()
     end
 end
 
@@ -96,7 +131,7 @@ function GUIContainer:clearChildren()
     return old_children
 end
 function GUIContainer:_update()
-    if self.update then self:update() end
+    GUIElement._update(self)
     if self.children then for k, v in ipairs(self.children) do v:_update() end end
 end
 
@@ -179,14 +214,20 @@ function DragContainer:updatePosition(px, py, pz)
     if not self.root.drag_handle ~= self and aabb and isInAABB(aabb, mpos.x, mpos.y) then
         if self.root.player.ControlsComponent.mButtonFrameFire == self.root.cur_frame then
             self.root.drag_handle = self
+            self.predrag_pos = {x = self.x, y = self.y}
             self.drag_offset = {x = self.x - mpos.x, y = self.y - mpos.y}
+            self:_on_drag_start()
         end
     end
     -- Stop dragging when mouse is released
-    if not self.root.player.ControlsComponent.mButtonDownFire then self.root.drag_handle = nil end
+    if self.root.drag_handle == self and not self.root.player.ControlsComponent.mButtonDownFire then
+        self.root.drag_handle = nil
+        self:_on_drag_end()
+    end
     if self.root.drag_handle == self then
         self.x = mpos.x + self.drag_offset.x
         self.y = mpos.y + self.drag_offset.y
+        self:_on_drag()
     end
     GUIContainer.updatePosition(self, px, py, pz)
 end
@@ -337,7 +378,7 @@ function GUIContainer:GridBox(x, y, vertical, max_length, separation_x, separati
     return output
 end
 
----@class Alias
+---@class GUIAlias
 local Alias = {}
 setmetatable(Alias, {__index = GUIElement})
 Alias.__tostring = function(self) return "Alias: " .. tostring(self.original) end
@@ -358,6 +399,7 @@ end
 function Alias.Create(x, y, original, parent, instance_index)
     local output = GUIElement:Create(x, y)
     output.options = nil
+    output.data = nil
     output.original = original
     output.instance_index = instance_index
     if original.children then
@@ -367,6 +409,10 @@ function Alias.Create(x, y, original, parent, instance_index)
             table.insert(output.children, clone)
         end
     end
+    if original.tooltip then
+        output.tooltip = Alias.Create(original.tooltip.x, original.tooltip.y, original.tooltip,
+                                      output, instance_index)
+    end
     output.parent = parent
     output.root = parent.root
     setmetatable(output, Alias)
@@ -375,9 +421,9 @@ end
 ---@param x number
 ---@param y number
 ---@param original GUIElement
----@return Alias
+---@return GUIAlias
 function GUIContainer:Alias(x, y, original)
-    local output = Alias:Create(x, y, original, self)
+    local output = Alias.Create(x, y, original, self)
     self:addChild(output)
     return output
 end
@@ -482,19 +528,17 @@ end
 
 ---@class Button
 local Button = {}
-setmetatable(Button, {__index = GUIElement})
+setmetatable(Button, {__index = Text})
 Button.__tostring = function(self) return "Button: " .. self.text end
 Button.__index = Button
-function Button:render()
-    if not self.enabled then return end
-    GUIElement.applyModifiers(self)
-    local id = self.id or self.root:autoID()
-    local gui = self.root.handle
-    local clicked, rclicked = GuiButton(gui, id, self.true_x, self.true_y, self.text)
-    GUIElement.postRender(self)
-    if clicked and self.on_click then self:on_click() end
-    if rclicked and self.on_right_click then self:on_right_click() end
-end
+-- function Button:render()
+--     if not self.enabled then return end
+--     GUIElement.applyModifiers(self)
+--     local id = self.id or self.root:autoID()
+--     local gui = self.root.handle
+--     GuiButton(gui, id, self.true_x, self.true_y, self.text)
+--     GUIElement.postRender(self)
+-- end
 ---@param x number
 ---@param y number
 ---@param text string|nil
@@ -534,16 +578,19 @@ function Image:render()
     local gui = self.root.handle
     local id = self.id or self.root:autoID()
     local alpha = self.alpha or 1
-    local scale = self.scale or 1
+    local scale_x = self.scale_x or 1
+    local scale_y = self.scale_y or scale_x
     local rotation = self.rotation or 0
     local x = self.true_x
     local y = self.true_y
     if self.centered then
-        local w, h = GuiGetImageDimensions(gui, self.sprite, scale)
+        local w, h = GuiGetImageDimensions(gui, self.sprite, scale_x)
         x = x - w / 2
         y = y - h / 2
     end
-    GuiImage(gui, id, x, y, self.sprite, alpha, scale, rotation)
+    local anim_type = self.anim_type or GUI_RECT_ANIMATION_PLAYBACK.Loop
+    local anim_name = self.anim_name or "none"
+    GuiImage(gui, id, x, y, self.sprite, alpha, scale_x, scale_y, rotation, anim_type, anim_name)
     GUIElement.postRender(self)
 end
 ---@param x number
@@ -577,7 +624,7 @@ end
 
 ---@class ImageButton
 local ImageButton = {}
-setmetatable(ImageButton, {__index = GUIElement})
+setmetatable(ImageButton, {__index = Image})
 ImageButton.__tostring = function(self) return "ImageButton: " .. self.sprite end
 ImageButton.__index = ImageButton
 function ImageButton:render()
@@ -592,10 +639,8 @@ function ImageButton:render()
         x = x - w / 2
         y = y - h / 2
     end
-    local clicked, rclicked = GuiImageButton(gui, id, x, y, self.text, self.sprite)
+    GuiImageButton(gui, id, x, y, self.text, self.sprite)
     GUIElement.postRender(self)
-    if clicked and self.on_click then self:on_click() end
-    if rclicked and self.on_right_click then self:on_right_click() end
 end
 ---@param x number
 ---@param y number
@@ -669,29 +714,35 @@ function GUI.Create()
     output.handle = GuiCreate()
     output.z = 0
     output.children = {}
+    output.cache_frame = {}
     setmetatable(output, GUI)
     return output
 end
 ---@return vector2
 function GUI:GetMousePos()
-    local screen_w, screen_h = GuiGetScreenDimensions(self.handle)
-    local cx, cy = GameGetCameraPos()
-    local vx = MagicNumbersGetValue("VIRTUAL_RESOLUTION_X")
-    local vy = MagicNumbersGetValue("VIRTUAL_RESOLUTION_Y")
-    local mpos = self.player.ControlsComponent.mMousePosition
-    mpos.x = (mpos.x - cx) * screen_w / vx + screen_w / 2
-    mpos.y = (mpos.y - cy) * screen_h / vy + screen_h / 2
-    return mpos
+    if not self.cache_frame.mouse_pos then
+        local screen_w, screen_h = GuiGetScreenDimensions(self.handle)
+        local cx, cy = GameGetCameraPos()
+        local vx = MagicNumbersGetValue("VIRTUAL_RESOLUTION_X")
+        local vy = MagicNumbersGetValue("VIRTUAL_RESOLUTION_Y")
+        local mpos = self.player.ControlsComponent.mMousePosition
+        mpos.x = (mpos.x - cx) * screen_w / vx + screen_w / 2
+        mpos.y = (mpos.y - cy) * screen_h / vy + screen_h / 2
+        self.cache_frame.mouse_pos = mpos
+    end
+    return self.cache_frame.mouse_pos
 end
 function GUI:render()
     self.used_ids = {}
     self.id_counter = 1
+    self.cache_frame = {}
     self.cur_frame = GameGetFrameNum()
     local status, err = pcall(function()
         GuiStartFrame(self.handle)
         self.true_z = self.z
         for k, v in ipairs(self.children) do v:_update() end
         for k, v in ipairs(self.children) do v:updatePosition(0, 0, 0) end
+        self.hovered = {}
         for k, v in ipairs(self.children) do v:render() end
     end)
     if not status then
