@@ -295,19 +295,32 @@ function DragContainer:_update()
     -- If clicked, set variables to start checking for dragging
     if not self.culled and self.child_hovered and self.root.drag_handle ~= self then
         if mouse.left_frame == self.root.cur_frame then
+            -- If we're inside a scroll container, compute a screen space position specially
+            local true_x = self.true_x
+            local true_y = self.true_y
+            local parent = self.parent
+            while parent ~= self.root do
+                if parent.is_scroll_container then
+                    true_x = true_x + parent.true_x + parent.aabb[1]
+                    true_y = true_y + parent.true_y + parent.aabb[3]
+                    if parent.scroll_offset then
+                        true_x = true_x - parent.scroll_offset.x
+                        true_y = true_y - parent.scroll_offset.y
+                    end
+                end
+                parent = parent.parent
+            end
+
             self.root.drag_handle = self
             self.predrag_pos = {x = self.x, y = self.y}
-            self.drag_offset = {x = self.x - mouse.x, y = self.y - mouse.y}
+            self.click_pos = {x = mouse.x, y = mouse.y}
+            self.drag_offset = {x = true_x - mouse.x, y = true_y - mouse.y}
         end
     end
     -- Start dragging if the mouse moves while clicking
     if self.root.drag_handle == self and not self.is_dragging then
         if mouse.left then
-            local start_mouse = {
-                x = self.predrag_pos.x - self.drag_offset.x,
-                y = self.predrag_pos.y - self.drag_offset.y
-            }
-            if (mouse.x - start_mouse.x) ^ 2 + (mouse.y - start_mouse.y) ^ 2 > 10 ^ 2 then
+            if (mouse.x - self.click_pos.x) ^ 2 + (mouse.y - self.click_pos.y) ^ 2 > 10 ^ 2 then
                 self.is_dragging = true
                 self:_on_drag_start()
             end
@@ -334,22 +347,7 @@ function DragContainer:updatePosition(px, py, pz)
         self.y = mouse.y + self.drag_offset.y
         self:_on_drag()
 
-        -- If we're inside a scroll container, compute a screen space position specially
-        local true_x = px
-        local true_y = py
-        local parent = self.parent
-        while parent ~= self.root do
-            if parent.is_scroll_container then
-                true_x = true_x + parent.true_x + parent.aabb[1]
-                true_y = true_y + parent.true_y + parent.aabb[3]
-                if parent.scroll_offset then
-                    true_x = true_x - parent.scroll_offset.x
-                    true_y = true_y - parent.scroll_offset.y
-                end
-            end
-            parent = parent.parent
-        end
-        GUIContainer.updatePosition(self, true_x, true_y, pz)
+        GUIContainer.updatePosition(self, 0, 0, pz)
     else
         GUIContainer.updatePosition(self, px, py, pz)
     end
@@ -500,7 +498,7 @@ function GridBox:updatePosition(px, py, pz)
                     local aabb = v:getAABB() or {0, 0, 0, 0}
                     local width = aabb[2] - aabb[1]
                     local height = aabb[4] - aabb[3]
-                    if width == 0 then print("zero width!") end
+                    -- if width == 0 then print("zero width!") end
                     edge_x = edge_x + width + sep_x
                     if self.max_length and edge_x - self.true_x > self.max_length + 1 then
                         edge_x = self.true_x
