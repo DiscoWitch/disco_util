@@ -1,6 +1,7 @@
 dofile_once("data/scripts/lib/utilities.lua")
 dofile_once("mods/azoth/files/lib/disco_util/disco_util.lua")
 
+---Order is left, right, top, bottom
 ---@class AABB
 
 ---@param aabb AABB
@@ -46,33 +47,27 @@ function GUIElement:applyModifiers()
     if self.true_z then GuiZSetForNextWidget(gui, self.true_z) end
 end
 function GUIElement:_on_click()
-    local test = self
-    while test ~= self.root do
-        if test.click_disabled then return end
-        test = test.parent
-    end
+    if self.root.click_disabled then return end
     if self.on_click then self:on_click() end
 end
 function GUIElement:_on_right_click() if self.on_right_click then self:on_right_click() end end
 function GUIElement:_on_hover_start() if self.on_hover_start then self:on_hover_start() end end
-function GUIElement:_on_hover() if self.on_hover then self:on_hover() end end
+function GUIElement:_on_hover()
+    local parent = self.parent
+    while parent.children and parent ~= self.root do
+        parent.child_hovered = true
+        parent = parent.parent
+    end
+    if self.on_hover then self:on_hover() end
+end
 function GUIElement:_on_hover_end() if self.on_hover_end then self:on_hover_end() end end
 function GUIElement:_on_drag_start() if self.on_drag_start then self:on_drag_start() end end
 function GUIElement:_on_drag() if self.on_drag then self:on_drag() end end
 function GUIElement:_on_drag_end()
-    if (self.x - self.predrag_pos.x) ^ 2 + (self.y - self.predrag_pos.y) ^ 2 > 3 ^ 2 then
-        if self.on_drag_end then self:on_drag_end() end
-        self.click_disabled = true
-    else
-        self.x = self.predrag_pos.x
-        self.y = self.predrag_pos.y
-    end
+    if self.on_drag_end then self:on_drag_end() end
+    self.root.click_disabled = true
 end
-function GUIElement:_update()
-    self.click_disabled = false
-    if self.update then self:update() end
-    if self.tooltip then self.tooltip:_update() end
-end
+function GUIElement:_update() if self.update then self:update() end end
 ---@param px number
 ---@param py number
 function GUIElement:updatePosition(px, py, pz)
@@ -81,36 +76,43 @@ function GUIElement:updatePosition(px, py, pz)
     self.true_x = self.x + px
     self.true_y = self.y + py
     self.true_z = pz + (self.z or -0.1)
-    if self.tooltip then self.tooltip:updatePosition(self.true_x, self.true_y, self.true_z) end
+    self.culled =
+        self.root.cull_aabb and not isInAABB(self.root.cull_aabb, self.true_x, self.true_y)
+    self:compute_aabb()
 end
 function GUIElement:render() print_error("called virtual render function") end
 function GUIElement:postRender()
     local gui = self.root.handle
     local prev_data = self.last_render_data
     self.last_render_data = GetWidgetInfoPacked(gui)
-    if self.last_render_data and self.last_render_data.clicked then self:_on_click() end
-    if self.last_render_data and self.last_render_data.right_clicked then self:_on_right_click() end
-    if self.last_render_data and self.last_render_data.hovered then
+    local data = self.last_render_data
+    local mpos = self.root:GetMouse()
+    if self.root.cull_aabb and not isInAABB(self.root.cull_aabb, mpos.x, mpos.y) then
+        if data then
+            data.clicked = false
+            data.right_clicked = false
+            data.hovered = false
+        end
+    end
+    if data and data.clicked then self:_on_click() end
+    if data and data.right_clicked then self:_on_right_click() end
+    if data and data.hovered then
         table.insert(self.root.hovered, self)
         if prev_data and not prev_data.hovered then self:_on_hover_start() end
         self:_on_hover()
-        if self.tooltip then self.tooltip:render() end
+        if self.tooltip then
+            self.root.tooltip = {entity = self.tooltip, x = data.x, y = data.y}
+        end
     elseif prev_data and prev_data.hovered then
         self:_on_hover_end()
     end
 end
 
----@return AABB
-function GUIElement:getAABB()
-    if not self.enabled then return nil end
-    local data = self.last_render_data
-    return data and {
-        data.x - self.true_x,
-        data.x + data.width - self.true_x,
-        data.y - self.true_y,
-        data.y + data.height - self.true_y
-    }
+function GUIElement:compute_aabb()
+    -- Virtual function
 end
+---@return AABB
+function GUIElement:getAABB() return self._aabb end
 
 ---@class GUIContainer
 local GUIContainer = {}
@@ -132,7 +134,7 @@ function GUIContainer:clearChildren()
 end
 function GUIContainer:_update()
     GUIElement._update(self)
-    if self.children then for k, v in ipairs(self.children) do v:_update() end end
+    if self.children then for _, v in ipairs(self.children) do v:_update() end end
 end
 
 ---@param px number
@@ -141,20 +143,21 @@ function GUIContainer:updatePosition(px, py, pz)
     if not self.enabled then return end
     GUIElement.updatePosition(self, px, py, pz)
     if self.children then
-        for k, v in ipairs(self.children) do
+        for _, v in ipairs(self.children) do
             v:updatePosition(self.true_x, self.true_y, self.true_z)
         end
     end
 end
 function GUIContainer:render()
-    if not self.enabled then return end
-    for k, v in ipairs(self.children) do v:render() end
+    self.child_hovered = false
+    if (self.culled and not self.no_cull) or not self.enabled then return end
+    if self.children then for _, v in ipairs(self.children) do v:render() end end
 end
 ---@return AABB
 function GUIContainer:getAABB()
     if not self.enabled then return nil end
     local aabb = nil
-    for k, v in ipairs(self.children) do
+    for _, v in ipairs(self.children) do
         local child_aabb = v:getAABB()
         if child_aabb then
             if not aabb then
@@ -174,7 +177,7 @@ end
 
 GUIContainer.__tostring = function(self)
     local str = "GUIContainer with children:"
-    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
 GUIContainer.__index = GUIContainer
@@ -190,47 +193,186 @@ function GUIContainer:GUIContainer(x, y)
     return output
 end
 
+---@class ScrollContainer
+local ScrollContainer = {}
+setmetatable(ScrollContainer, {__index = GUIContainer})
+ScrollContainer.__tostring = function(self)
+    local str = "ScrollContainer with children:"
+    for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    return str
+end
+ScrollContainer.__index = ScrollContainer
+ScrollContainer.is_scroll_container = true
+---@param px number
+---@param py number
+function ScrollContainer:updatePosition(px, py, pz)
+    if not self.enabled then return end
+    GUIElement.updatePosition(self, px, py, pz)
+    if self.children then
+        -- Set a culling AABB and don't bother rendering things outside it
+        local temp = self.root.cull_aabb
+        self.root.cull_aabb = self.cull_aabb
+        for _, v in ipairs(self.children) do
+            v:updatePosition(-self.aabb[1], -self.aabb[3], self.true_z)
+        end
+        self.root.cull_aabb = temp
+    end
+end
+function ScrollContainer:render()
+    if not self.enabled then return end
+    local gui = self.root.handle
+    local id = self.id or self.root:autoID()
+    local left = self.true_x + self.aabb[1]
+    local width = self.aabb[2] - self.aabb[1]
+    local top = self.true_y + self.aabb[3]
+    local height = self.aabb[4] - self.aabb[3]
+    local focusable = self.focusable or true
+    local margin_x = self.margin_x or 2
+    local margin_y = self.margin_y or 2
+    GuiBeginScrollContainer(gui, id, left, top, width, height, focusable, margin_x, margin_y)
+    -- Draw an invisible button at 0,0 to use as a reference for the scroll bar
+    GuiButton(gui, self.root:autoID(), 0, 0, "")
+    local data = GetWidgetInfoPacked(gui)
+    -- Set an offset to the mouse position for 
+    self.scroll_offset = {x = left + margin_x - data.x, y = top + margin_y - data.y}
+    local cull_margin = self.cull_margin or 0
+    -- Set a culling box with margins for drawing children on the next frame    
+    self.cull_aabb = {
+        self.scroll_offset.x + cull_margin.x,
+        self.scroll_offset.x + width - cull_margin.x,
+        self.scroll_offset.y + cull_margin.y,
+        self.scroll_offset.y + height - cull_margin.y
+    }
+    -- Set an exact screenspace cull box without margins for mouse detection right now
+    local temp_cull_aabb = self.root.cull_aabb
+    self.root.cull_aabb = {left, left + width, top, top + height}
+    for _, v in ipairs(self.children) do v:render() end
+    self.root.cull_aabb = temp_cull_aabb
+    -- Draw another button at the bottom right corner to force a constant size
+    local inside_aabb = GUIContainer.getAABB(self)
+    GuiButton(gui, self.root:autoID(), inside_aabb[2], inside_aabb[4], "")
+    GuiEndScrollContainer(gui)
+end
+---@return AABB
+function ScrollContainer:getAABB()
+    if not self.enabled then return nil end
+    local aabb = offsetAABB(self.aabb, self.true_x, self.true_y)
+    local margin_x = self.margin_x or 2
+    local margin_y = self.margin_y or 2
+    aabb[2] = aabb[2] + 10 + 2 * margin_x
+    aabb[4] = aabb[4] + 2 * margin_y
+    return aabb
+end
+
+---@param x number
+---@param y number
+---@param aabb AABB
+---@return ScrollContainer
+function GUIContainer:ScrollContainer(x, y, aabb)
+    local output = GUIContainer:Create()
+    output.x = x
+    output.y = y
+    output.aabb = aabb
+    output.parent = self
+    output.root = self.root
+    setmetatable(output, ScrollContainer)
+    self:addChild(output)
+    return output
+end
+
 ---@class DragContainer
 local DragContainer = {}
 setmetatable(DragContainer, {__index = GUIContainer})
 DragContainer.__tostring = function(self)
     local str = "DragContainer with children:"
-    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
 DragContainer.__index = DragContainer
 
----@param px number
----@param py number
-function DragContainer:updatePosition(px, py, pz)
-    GUIContainer.updatePosition(self, px, py, pz)
-    local mpos = self.root:GetMousePos()
-    local aabb = self.aabb
-    if aabb then
-        aabb = offsetAABB(aabb, self.true_x, self.true_y)
-    else
-        aabb = self:getAABB()
-    end
-    if not self.root.drag_handle ~= self and aabb and isInAABB(aabb, mpos.x, mpos.y) then
-        if self.root.player.ControlsComponent.mButtonFrameFire == self.root.cur_frame then
+function DragContainer:_update()
+    local mouse = self.root:GetMouse()
+    -- If clicked, set variables to start checking for dragging
+    if not self.culled and self.child_hovered and self.root.drag_handle ~= self then
+        if mouse.left_frame == self.root.cur_frame then
             self.root.drag_handle = self
             self.predrag_pos = {x = self.x, y = self.y}
-            self.drag_offset = {x = self.x - mpos.x, y = self.y - mpos.y}
-            self:_on_drag_start()
+            self.drag_offset = {x = self.x - mouse.x, y = self.y - mouse.y}
+        end
+    end
+    -- Start dragging if the mouse moves while clicking
+    if self.root.drag_handle == self and not self.is_dragging then
+        if mouse.left then
+            local start_mouse = {
+                x = self.predrag_pos.x - self.drag_offset.x,
+                y = self.predrag_pos.y - self.drag_offset.y
+            }
+            if (mouse.x - start_mouse.x) ^ 2 + (mouse.y - start_mouse.y) ^ 2 > 10 ^ 2 then
+                self.is_dragging = true
+                self:_on_drag_start()
+            end
+        else
+            self.root.drag_handle = nil
         end
     end
     -- Stop dragging when mouse is released
-    if self.root.drag_handle == self and not self.root.player.ControlsComponent.mButtonDownFire then
+    if self.is_dragging and not mouse.left then
+        self.is_dragging = false
         self.root.drag_handle = nil
         self:_on_drag_end()
     end
-    if self.root.drag_handle == self then
-        self.x = mpos.x + self.drag_offset.x
-        self.y = mpos.y + self.drag_offset.y
-        self:_on_drag()
-    end
-    GUIContainer.updatePosition(self, px, py, pz)
+    GUIContainer._update(self)
 end
+---@param px number
+---@param py number
+function DragContainer:updatePosition(px, py, pz)
+    GUIElement.updatePosition(self, px, py, pz)
+    -- Follow the mouse while dragging
+    if self.is_dragging then
+        local mouse = self.root:GetMouse()
+        self.x = mouse.x + self.drag_offset.x
+        self.y = mouse.y + self.drag_offset.y
+        self:_on_drag()
+
+        -- If we're inside a scroll container, compute a screen space position specially
+        local true_x = px
+        local true_y = py
+        local parent = self.parent
+        while parent ~= self.root do
+            if parent.is_scroll_container then
+                true_x = true_x + parent.true_x + parent.aabb[1]
+                true_y = true_y + parent.true_y + parent.aabb[3]
+                if parent.scroll_offset then
+                    true_x = true_x - parent.scroll_offset.x
+                    true_y = true_y - parent.scroll_offset.y
+                end
+            end
+            parent = parent.parent
+        end
+        GUIContainer.updatePosition(self, true_x, true_y, pz)
+    else
+        GUIContainer.updatePosition(self, px, py, pz)
+    end
+end
+function DragContainer:render()
+    -- We use a special render order while dragging to prevent hierarchy issues
+    if not self.enabled or self.is_dragging then return end
+    GUIContainer.render(self)
+end
+function DragContainer:render_drag()
+    if self.is_dragging then for _, v in ipairs(self.children) do v:render() end end
+end
+---@return AABB
+function DragContainer:getAABB()
+    if not self.enabled then return nil end
+    -- Don't contribute to parent AABB while dragging
+    if self.is_dragging then
+        return nil
+    else
+        return GUIContainer.getAABB(self)
+    end
+end
+
 ---@param x number
 ---@param y number
 ---@param aabb AABB|nil
@@ -252,7 +394,7 @@ local AutoBox = {}
 setmetatable(AutoBox, {__index = GUIContainer})
 AutoBox.__tostring = function(self)
     local str = "AutoBox with children:"
-    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
 AutoBox.__index = AutoBox
@@ -263,6 +405,17 @@ function AutoBox:render()
     local alpha = self.alpha or 1
     local sprite = self.sprite or "data/ui_gfx/decorations/9piece0_gray.png"
     local sprite_highlight = self.sprite_highlight or sprite
+
+    -- local true_x = self.true_x
+    -- local true_y = self.true_y
+    -- local parent = self.parent
+    -- while parent ~= self.root do
+    --     if parent.is_scroll_container then
+    --         true_x = true_x + parent.true_x + parent.aabb[1]
+    --         true_y = true_y + parent.true_y + parent.aabb[3]
+    --     end
+    --     parent = parent.parent
+    -- end
     local aabb = self.aabb
     if aabb then
         aabb = offsetAABB(aabb, self.true_x, self.true_y)
@@ -303,10 +456,12 @@ local GridBox = {}
 setmetatable(GridBox, {__index = GUIContainer})
 GridBox.__tostring = function(self)
     local str = "GridBox with children:"
-    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
 GridBox.__index = GridBox
+-- Don't cull grid boxes because they render stuff far away from themselves
+GridBox.no_cull = true
 ---@param px number
 ---@param py number
 function GridBox:updatePosition(px, py, pz)
@@ -319,7 +474,7 @@ function GridBox:updatePosition(px, py, pz)
         local sep_y = self.separation_y or 0
         if self.vertical then
             local col_width = 0
-            for k, v in ipairs(self.children) do
+            for _, v in ipairs(self.children) do
                 if v.enabled then
                     v:updatePosition(edge_x, edge_y, self.true_z)
                     local aabb = v:getAABB() or {0, 0, 0, 0}
@@ -338,12 +493,14 @@ function GridBox:updatePosition(px, py, pz)
             end
         else
             local row_height = 0
-            for k, v in ipairs(self.children) do
+            -- Draw rows of children
+            for _, v in ipairs(self.children) do
                 if v.enabled then
                     v:updatePosition(edge_x, edge_y, self.true_z)
                     local aabb = v:getAABB() or {0, 0, 0, 0}
                     local width = aabb[2] - aabb[1]
                     local height = aabb[4] - aabb[3]
+                    if width == 0 then print("zero width!") end
                     edge_x = edge_x + width + sep_x
                     if self.max_length and edge_x - self.true_x > self.max_length + 1 then
                         edge_x = self.true_x
@@ -404,7 +561,7 @@ function Alias.Create(x, y, original, parent, instance_index)
     output.instance_index = instance_index
     if original.children then
         output.children = {}
-        for k, v in ipairs(original.children) do
+        for _, v in ipairs(original.children) do
             local clone = Alias.Create(v.x, v.y, v, output, instance_index)
             table.insert(output.children, clone)
         end
@@ -433,7 +590,7 @@ local GridBoxInstanced = {}
 setmetatable(GridBoxInstanced, {__index = GridBox})
 GridBoxInstanced.__tostring = function(self)
     local str = "GridBox with instanced children:"
-    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
 GridBoxInstanced.__index = function(self, key)
@@ -443,7 +600,7 @@ GridBoxInstanced.__index = function(self, key)
             -- Update instances
             self.children_instanced = {}
             for i = 1, self.count do
-                for k, v in ipairs(self._children) do
+                for _, v in ipairs(self._children) do
                     local clone = Alias.Create(0, 0, v, self, i)
                     table.insert(self.children_instanced, clone)
                 end
@@ -513,9 +670,9 @@ function GUIContainer:Text(x, y, text)
     self:addChild(output)
     return output
 end
----@return AABB
-function Text:getAABB()
+function Text:compute_aabb()
     if not self.enabled then return nil end
+    -- If we have a precomputed bounding box
     local w, h = GuiGetTextDimensions(self.root.handle, self.text, 1, 2)
     local x = self.true_x
     local y = self.true_y
@@ -523,7 +680,23 @@ function Text:getAABB()
         x = x - w / 2
         y = y - h / 2
     end
-    return {x, x + w, y, y + h}
+    self._aabb = {x, x + w, y, y + h}
+end
+---@return AABB
+function Text:getAABB()
+    if not self.enabled then return nil end
+    -- If we have a precomputed bounding box
+    -- if not self._aabb then
+    --     local w, h = GuiGetTextDimensions(self.root.handle, self.text, 1, 2)
+    --     local x = self.true_x
+    --     local y = self.true_y
+    --     if self.centered then
+    --         x = x - w / 2
+    --         y = y - h / 2
+    --     end
+    --     self._aabb = {x, x + w, y, y + h}
+    -- end
+    return self._aabb
 end
 
 ---@class Button
@@ -531,14 +704,7 @@ local Button = {}
 setmetatable(Button, {__index = Text})
 Button.__tostring = function(self) return "Button: " .. self.text end
 Button.__index = Button
--- function Button:render()
---     if not self.enabled then return end
---     GUIElement.applyModifiers(self)
---     local id = self.id or self.root:autoID()
---     local gui = self.root.handle
---     GuiButton(gui, id, self.true_x, self.true_y, self.text)
---     GUIElement.postRender(self)
--- end
+
 ---@param x number
 ---@param y number
 ---@param text string|nil
@@ -554,18 +720,6 @@ function GUIContainer:Button(x, y, text, id)
     self:addChild(output)
     return output
 end
----@return AABB
-function Button:getAABB()
-    if not self.enabled then return nil end
-    local w, h = GuiGetTextDimensions(self.root.handle, self.text, 1, 2)
-    local x = self.true_x
-    local y = self.true_y
-    if self.centered then
-        x = x - w / 2
-        y = y - h / 2
-    end
-    return {x, x + w, y, y + h}
-end
 
 ---@class Image
 local Image = {}
@@ -580,13 +734,17 @@ function Image:render()
     local alpha = self.alpha or 1
     local scale_x = self.scale_x or 1
     local scale_y = self.scale_y or scale_x
+    if self.hovered then
+        scale_x = scale_x * 1.1
+        scale_y = scale_y * 1.1
+    end
     local rotation = self.rotation or 0
     local x = self.true_x
     local y = self.true_y
     if self.centered then
         local w, h = GuiGetImageDimensions(gui, self.sprite, scale_x)
-        x = x - w / 2
-        y = y - h / 2
+        x = x - w * math.cos(rotation) / 2 + h * math.sin(rotation) / 2
+        y = y - h * math.cos(rotation) / 2 - w * math.sin(rotation) / 2
     end
     local anim_type = self.anim_type or GUI_RECT_ANIMATION_PLAYBACK.Loop
     local anim_name = self.anim_name or "none"
@@ -609,9 +767,9 @@ function GUIContainer:Image(x, y, sprite, id)
     self:addChild(output)
     return output
 end
----@return AABB
-function Image:getAABB()
+function Image:compute_aabb()
     if not self.enabled then return nil end
+    -- If we have a precomputed bounding box
     local w, h = GuiGetImageDimensions(self.root.handle, self.sprite, self.scale or 1)
     local x = self.true_x
     local y = self.true_y
@@ -619,7 +777,23 @@ function Image:getAABB()
         x = x - w / 2
         y = y - h / 2
     end
-    return {x, x + w, y, y + h}
+    self._aabb = {x, x + w, y, y + h}
+end
+---@return AABB
+function Image:getAABB()
+    if not self.enabled then return nil end
+    -- If we have a precomputed bounding box
+    -- if not self._aabb then
+    --     local w, h = GuiGetImageDimensions(self.root.handle, self.sprite, self.scale or 1)
+    --     local x = self.true_x
+    --     local y = self.true_y
+    --     if self.centered then
+    --         x = x - w / 2
+    --         y = y - h / 2
+    --     end
+    --     self._aabb = {x, x + w, y, y + h}
+    -- end
+    return self._aabb
 end
 
 ---@class ImageButton
@@ -627,20 +801,18 @@ local ImageButton = {}
 setmetatable(ImageButton, {__index = Image})
 ImageButton.__tostring = function(self) return "ImageButton: " .. self.sprite end
 ImageButton.__index = ImageButton
-function ImageButton:render()
-    if not self.enabled then return end
-    GUIElement.applyModifiers(self)
-    local id = self.id or self.root:autoID()
-    local gui = self.root.handle
-    local x = self.true_x
-    local y = self.true_y
-    if self.centered then
-        local w, h = GuiGetImageDimensions(gui, self.sprite, 1)
-        x = x - w / 2
-        y = y - h / 2
-    end
-    GuiImageButton(gui, id, x, y, self.text, self.sprite)
-    GUIElement.postRender(self)
+function ImageButton:_update()
+    if self.wobble then self.rotation = math.cos(self.root.now * math.pi / 20) * math.pi / 32 end
+    GUIElement._update(self)
+end
+
+function ImageButton:_on_hover_start()
+    self.hovered = true
+    GUIElement._on_hover_start(self)
+end
+function ImageButton:_on_hover_end()
+    self.hovered = false
+    GUIElement._on_hover_end(self)
 end
 ---@param x number
 ---@param y number
@@ -659,31 +831,20 @@ function GUIContainer:ImageButton(x, y, sprite, id)
     self:addChild(output)
     return output
 end
-function ImageButton:getAABB()
-    if not self.enabled then return nil end
-    local w, h = GuiGetImageDimensions(self.root.handle, self.sprite, 1)
-    local x = self.true_x
-    local y = self.true_y
-    if self.centered then
-        x = x - w / 2
-        y = y - h / 2
-    end
-    return {x, x + w, y, y + h}
-end
 
 ---@class Tooltip
 local Tooltip = {}
 setmetatable(Tooltip, {__index = GUIContainer})
 Tooltip.__tostring = function(self)
     local str = "Tooltip with children:"
-    for k, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
+    for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
 Tooltip.__index = Tooltip
 -- function Tooltip:render() if not self.enabled then return end end
 ---@return Tooltip
 function GUIElement:Tooltip(x, y)
-    x = x or 20
+    x = x or 0
     y = y or 0
     local output = GUIContainer:Create(x, y)
     output.parent = self
@@ -719,31 +880,49 @@ function GUI.Create()
     return output
 end
 ---@return vector2
-function GUI:GetMousePos()
-    if not self.cache_frame.mouse_pos then
+function GUI:GetMouse()
+    if not self.cache_frame.mousedata then
         local screen_w, screen_h = GuiGetScreenDimensions(self.handle)
         local cx, cy = GameGetCameraPos()
         local vx = MagicNumbersGetValue("VIRTUAL_RESOLUTION_X")
         local vy = MagicNumbersGetValue("VIRTUAL_RESOLUTION_Y")
-        local mpos = self.player.ControlsComponent.mMousePosition
-        mpos.x = (mpos.x - cx) * screen_w / vx + screen_w / 2
-        mpos.y = (mpos.y - cy) * screen_h / vy + screen_h / 2
-        self.cache_frame.mouse_pos = mpos
+        local controls = self.player.ControlsComponent
+        local mpos = controls.mMousePosition
+        self.cache_frame.mousedata = {
+            x = (mpos.x - cx) * screen_w / vx + screen_w / 2,
+            y = (mpos.y - cy) * screen_h / vy + screen_h / 2,
+            left = controls.mButtonDownFire,
+            left_frame = controls.mButtonFrameFire,
+            right = controls.mButtonDownRightClick,
+            right_frame = controls.mButtonFrameRightClick
+        }
     end
-    return self.cache_frame.mouse_pos
+    return self.cache_frame.mousedata
 end
 function GUI:render()
+    self.last_frame = self.now
+    self.now = GameGetFrameNum()
+    self.click_disabled = false
     self.used_ids = {}
     self.id_counter = 1
     self.cache_frame = {}
+    self.tooltip = nil
     self.cur_frame = GameGetFrameNum()
     local status, err = pcall(function()
         GuiStartFrame(self.handle)
         self.true_z = self.z
-        for k, v in ipairs(self.children) do v:_update() end
-        for k, v in ipairs(self.children) do v:updatePosition(0, 0, 0) end
+        for _, v in ipairs(self.children) do v:_update() end
+        for _, v in ipairs(self.children) do v:updatePosition(0, 0, 0) end
         self.hovered = {}
-        for k, v in ipairs(self.children) do v:render() end
+        for _, v in ipairs(self.children) do v:render() end
+        if self.drag_handle then
+            self.drag_handle:render_drag()
+        elseif self.tooltip then
+            local tt = self.tooltip.entity
+            tt:_update()
+            tt:updatePosition(self.tooltip.x, self.tooltip.y, -10)
+            tt:render()
+        end
     end)
     if not status then
         print_error("error while rendering")
