@@ -622,7 +622,6 @@ GridBoxInstanced.__tostring = function(self)
     for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
-function GridBoxInstanced:ForceUpdate() end
 GridBoxInstanced.__index = function(self, key)
     if key == "children" then
         if self.count ~= self.prev_count or self.update_children then
@@ -911,14 +910,12 @@ function GUIInitInventory()
             return
         end
         if self.inventory then
-            print("adding to inventory")
             -- Put it in the linked inventory
             item.ItemComponent.inventory_slot = self.slot or {x = 0, y = 0}
             item:setParent(self.inventory)
             if self.update_inventory then self:update_inventory() end
         else
             -- Just hold a reference to the item
-            print("Setting reference to " .. tostring(item))
             self:setItem(item)
         end
     end
@@ -933,8 +930,13 @@ function GUIInitInventory()
         self:Image(0, 0, "data/ui_gfx/inventory/quick_inventory_box.png").z = 0
         if not item then return end
 
-        local draggable = self:DragContainer(0, 0)
-        function draggable:on_drag_end()
+        local item_handle = nil
+        if self.disable_drag then
+            item_handle = self:GUIContainer(0, 0)
+        else
+            item_handle = self:DragContainer(0, 0)
+        end
+        function item_handle:on_drag_end()
             local src_slot = self.parent
             for _, v in ipairs(self.root.hovered) do
                 local dest_slot = v.parent
@@ -951,15 +953,25 @@ function GUIInitInventory()
             -- Spell cards
             self.data.has_spell = true
             local sd = spell_data[iac.action_id]
-            self.data.border = draggable:Image(0, 0, spell_borders[sd.type])
-            self.data.sprite = draggable:ImageButton(0, 0, sd.sprite)
+            self.data.border = item_handle:Image(0, 0, spell_borders[sd.type])
+            self.data.sprite = item_handle:ImageButton(0, 0, sd.sprite)
             local uses = item.ItemComponent.uses_remaining
             if uses ~= -1 then
-                self.data.uses = draggable:Text(-10, -10, tostring(uses))
+                self.data.uses = item_handle:Text(-10, -10, tostring(uses))
                 self.data.uses.z = -0.3
             end
             self.data.sprite.z = -0.2
             self.data.sprite.wobble = true
+
+            function self.data.sprite.on_click() self:on_click() end
+            function self.data.sprite.on_right_click() self:on_right_click() end
+
+            self.data.tooltip = self.data.border:Tooltip(30, 0)
+            local ttbox = self.data.tooltip:AutoBox(0, 0)
+            ttbox.margins = {5, 5, 5, 5}
+            local ttgrid = ttbox:GridBox(0, 0, true)
+            ttgrid:Text(0, 0, GameTextGetTranslatedOrNot(sd.name):upper())
+            ttgrid:Text(0, 0, sd.description)
         else
             self.data.has_item = true
             local ac = item.AbilityComponent
@@ -1043,7 +1055,7 @@ function GUI:render()
         for _, v in ipairs(self.children) do v:updatePosition(0, 0, 0) end
         for _, v in ipairs(self.children) do v:render() end
         for _, v in ipairs(self.callbacks) do v.func(v.self) end
-        if self.drag_handle then
+        if self.drag_handle and self.drag_handle.is_dragging then
             self.drag_handle:render_drag()
         elseif self.tooltip then
             local tt = self.tooltip.entity
