@@ -1,5 +1,4 @@
 dofile_once("data/scripts/lib/utilities.lua")
-dofile_once("mods/azoth/files/lib/disco_util/disco_util.lua")
 
 ---Order is left, right, top, bottom
 ---@class AABB
@@ -36,6 +35,9 @@ function GUIElement:Create(x, y)
     output.options[GUI_OPTION.NoPositionTween] = true
     return output
 end
+function GUIElement:ForceUpdate()
+    -- Virtual function for making entities refresh their cached properties
+end
 function GUIElement:applyModifiers()
     local gui = self.root.handle
     if self.color then
@@ -48,23 +50,43 @@ function GUIElement:applyModifiers()
 end
 function GUIElement:_on_click()
     if self.root.click_disabled then return end
-    if self.on_click then self:on_click() end
+    if self.on_click then table.insert(self.root.callbacks, {self = self, func = self.on_click}) end
 end
-function GUIElement:_on_right_click() if self.on_right_click then self:on_right_click() end end
-function GUIElement:_on_hover_start() if self.on_hover_start then self:on_hover_start() end end
+function GUIElement:_on_right_click()
+    if self.on_right_click then
+        table.insert(self.root.callbacks, {self = self, func = self.on_right_click})
+    end
+end
+function GUIElement:_on_hover_start()
+    if self.on_hover_start then
+        table.insert(self.root.callbacks, {self = self, func = self.on_hover_start})
+    end
+end
 function GUIElement:_on_hover()
     local parent = self.parent
     while parent.children and parent ~= self.root do
         parent.child_hovered = true
         parent = parent.parent
     end
-    if self.on_hover then self:on_hover() end
+    if self.on_hover then table.insert(self.root.callbacks, {self = self, func = self.on_hover}) end
 end
-function GUIElement:_on_hover_end() if self.on_hover_end then self:on_hover_end() end end
-function GUIElement:_on_drag_start() if self.on_drag_start then self:on_drag_start() end end
-function GUIElement:_on_drag() if self.on_drag then self:on_drag() end end
+function GUIElement:_on_hover_end()
+    if self.on_hover_end then
+        table.insert(self.root.callbacks, {self = self, func = self.on_hover_end})
+    end
+end
+function GUIElement:_on_drag_start()
+    if self.on_drag_start then
+        table.insert(self.root.callbacks, {self = self, func = self.on_drag_start})
+    end
+end
+function GUIElement:_on_drag()
+    if self.on_drag then table.insert(self.root.callbacks, {self = self, func = self.on_drag}) end
+end
 function GUIElement:_on_drag_end()
-    if self.on_drag_end then self:on_drag_end() end
+    if self.on_drag_end then
+        table.insert(self.root.callbacks, {self = self, func = self.on_drag_end})
+    end
     self.root.click_disabled = true
 end
 function GUIElement:_update() if self.update then self:update() end end
@@ -250,7 +272,7 @@ function ScrollContainer:render()
     self.root.cull_aabb = temp_cull_aabb
     -- Draw another button at the bottom right corner to force a constant size
     local inside_aabb = GUIContainer.getAABB(self)
-    GuiButton(gui, self.root:autoID(), inside_aabb[2], inside_aabb[4], "")
+    if inside_aabb then GuiButton(gui, self.root:autoID(), inside_aabb[2], inside_aabb[4], "") end
     GuiEndScrollContainer(gui)
 end
 ---@return AABB
@@ -332,6 +354,13 @@ function DragContainer:_update()
     if self.is_dragging and not mouse.left then
         self.is_dragging = false
         self.root.drag_handle = nil
+        if self.free_drag then
+            self.x = self.predrag_pos.x + mouse.x - self.click_pos.x
+            self.y = self.predrag_pos.y + mouse.y - self.click_pos.y
+        else
+            self.x = self.predrag_pos.x
+            self.y = self.predrag_pos.y
+        end
         self:_on_drag_end()
     end
     GUIContainer._update(self)
@@ -571,6 +600,8 @@ function Alias.Create(x, y, original, parent, instance_index)
     output.parent = parent
     output.root = parent.root
     setmetatable(output, Alias)
+    if output._init then output:_init() end
+    if output.init then output:init() end
     return output
 end
 ---@param x number
@@ -591,19 +622,19 @@ GridBoxInstanced.__tostring = function(self)
     for _, v in ipairs(self.children) do str = str .. "\n - " .. tostring(v) end
     return str
 end
+function GridBoxInstanced:ForceUpdate() end
 GridBoxInstanced.__index = function(self, key)
     if key == "children" then
-        -- Do instancing logic
-        if self.count ~= self.real_count or self.update_children then
+        if self.count ~= self.prev_count or self.update_children then
             -- Update instances
             self.children_instanced = {}
             for i = 1, self.count do
-                for _, v in ipairs(self._children) do
+                for k, v in ipairs(self._children) do
                     local clone = Alias.Create(0, 0, v, self, i)
                     table.insert(self.children_instanced, clone)
                 end
             end
-            self.real_count = self.count
+            self.prev_count = self.count
             self.update_children = false
         end
         return self.children_instanced
@@ -614,6 +645,7 @@ end
 function GridBoxInstanced:clearChildren()
     local old_children = self._children
     self._children = {}
+    self.update_children = true
     return old_children
 end
 ---@param child GUIElement
@@ -652,7 +684,12 @@ function Text:render()
     if not self.enabled then return end
     GUIElement.applyModifiers(self)
     local gui = self.root.handle
-    GuiText(gui, self.true_x, self.true_y, self.text)
+    if self.root.cull_aabb then
+        local id = self.root:autoID()
+        GuiButton(gui, id, self.true_x, self.true_y, self.text)
+    else
+        GuiText(gui, self.true_x, self.true_y, self.text)
+    end
     GUIElement.postRender(self)
 end
 ---@param x number
@@ -683,17 +720,6 @@ end
 ---@return AABB
 function Text:getAABB()
     if not self.enabled then return nil end
-    -- If we have a precomputed bounding box
-    -- if not self._aabb then
-    --     local w, h = GuiGetTextDimensions(self.root.handle, self.text, 1, 2)
-    --     local x = self.true_x
-    --     local y = self.true_y
-    --     if self.centered then
-    --         x = x - w / 2
-    --         y = y - h / 2
-    --     end
-    --     self._aabb = {x, x + w, y, y + h}
-    -- end
     return self._aabb
 end
 
@@ -767,7 +793,6 @@ function GUIContainer:Image(x, y, sprite, id)
 end
 function Image:compute_aabb()
     if not self.enabled then return nil end
-    -- If we have a precomputed bounding box
     local w, h = GuiGetImageDimensions(self.root.handle, self.sprite, self.scale or 1)
     local x = self.true_x
     local y = self.true_y
@@ -780,17 +805,6 @@ end
 ---@return AABB
 function Image:getAABB()
     if not self.enabled then return nil end
-    -- If we have a precomputed bounding box
-    -- if not self._aabb then
-    --     local w, h = GuiGetImageDimensions(self.root.handle, self.sprite, self.scale or 1)
-    --     local x = self.true_x
-    --     local y = self.true_y
-    --     if self.centered then
-    --         x = x - w / 2
-    --         y = y - h / 2
-    --     end
-    --     self._aabb = {x, x + w, y, y + h}
-    -- end
     return self._aabb
 end
 
@@ -852,6 +866,120 @@ function GUIElement:Tooltip(x, y)
     return output
 end
 
+---Loads information needed to render spell cards and generate draggable inventory slots.
+---It's wrapped in a function because it needs to load the whole spells table and invert it
+---for sprite lookup, so it's a waste of processing time if you aren't using it
+function GUIInitInventory()
+    dofile_once("data/scripts/gun/gun_enums.lua")
+    dofile_once("data/scripts/gun/gun_actions.lua")
+
+    local spell_data = {}
+    for k, v in ipairs(actions) do spell_data[v.id] = v end
+
+    local spell_borders = {}
+    spell_borders[ACTION_TYPE_PROJECTILE] = "data/ui_gfx/inventory/item_bg_projectile.png"
+    spell_borders[ACTION_TYPE_STATIC_PROJECTILE] =
+        "data/ui_gfx/inventory/item_bg_static_projectile.png"
+    spell_borders[ACTION_TYPE_MODIFIER] = "data/ui_gfx/inventory/item_bg_modifier.png"
+    spell_borders[ACTION_TYPE_DRAW_MANY] = "data/ui_gfx/inventory/item_bg_draw_many.png"
+    spell_borders[ACTION_TYPE_MATERIAL] = "data/ui_gfx/inventory/item_bg_material.png"
+    spell_borders[ACTION_TYPE_OTHER] = "data/ui_gfx/inventory/item_bg_other.png"
+    spell_borders[ACTION_TYPE_UTILITY] = "data/ui_gfx/inventory/item_bg_utility.png"
+    spell_borders[ACTION_TYPE_PASSIVE] = "data/ui_gfx/inventory/item_bg_passive.png"
+
+    function SortSpells(a, b)
+        local sda = spell_data[a.ItemActionComponent.action_id]
+        local sdb = spell_data[b.ItemActionComponent.action_id]
+        if sda.type == sdb.type then
+            return GameTextGetTranslatedOrNot(sda.name) < GameTextGetTranslatedOrNot(sdb.name)
+        else
+            return sda.type < sdb.type
+        end
+    end
+
+    ---@class InventorySlot
+    local InventorySlot = {}
+    setmetatable(InventorySlot, {__index = GUIContainer})
+    InventorySlot.__tostring = function(self)
+        return "InventorySlot: " .. tostring(self.item or "Empty")
+    end
+    InventorySlot.__index = InventorySlot
+
+    function InventorySlot:putItem(item)
+        if not item then
+            print_error("Invalid drag item")
+            return
+        end
+        if self.inventory then
+            print("adding to inventory")
+            -- Put it in the linked inventory
+            item.ItemComponent.inventory_slot = self.slot or {x = 0, y = 0}
+            item:setParent(self.inventory)
+            if self.update_inventory then self:update_inventory() end
+        else
+            -- Just hold a reference to the item
+            print("Setting reference to " .. tostring(item))
+            self:setItem(item)
+        end
+    end
+
+    ---@param item Entity|nil
+    function InventorySlot:setItem(item)
+        -- Clear previous item
+        self.data = {}
+        self.item = item
+        self:clearChildren()
+        -- Draw a new background
+        self:Image(0, 0, "data/ui_gfx/inventory/quick_inventory_box.png").z = 0
+        if not item then return end
+
+        local draggable = self:DragContainer(0, 0)
+        function draggable:on_drag_end()
+            local src_slot = self.parent
+            for _, v in ipairs(self.root.hovered) do
+                local dest_slot = v.parent
+                if (src_slot.data.has_item and dest_slot.accept_items)
+                    or (src_slot.data.has_spell and dest_slot.accept_spells) then
+                    dest_slot:putItem(src_slot.item)
+                    if src_slot.update_inventory then src_slot:update_inventory() end
+                end
+            end
+        end
+
+        local iac = item.ItemActionComponent
+        if iac then
+            -- Spell cards
+            self.data.has_spell = true
+            local sd = spell_data[iac.action_id]
+            self.data.border = draggable:Image(0, 0, spell_borders[sd.type])
+            self.data.sprite = draggable:ImageButton(0, 0, sd.sprite)
+            local uses = item.ItemComponent.uses_remaining
+            if uses ~= -1 then
+                self.data.uses = draggable:Text(-10, -10, tostring(uses))
+                self.data.uses.z = -0.3
+            end
+            self.data.sprite.z = -0.2
+            self.data.sprite.wobble = true
+        else
+            self.data.has_item = true
+            local ac = item.AbilityComponent
+            local ic = item.ItemComponent
+        end
+    end
+
+    ---@param x any
+    ---@param y any
+    ---@param item any
+    function GUIContainer:InventorySlot(x, y, item)
+        local output = self:GUIContainer(x, y)
+        output.accept_items = true
+        output.accept_spells = true
+        setmetatable(output, InventorySlot)
+        output:setItem(item)
+        return output
+    end
+end
+
 ---@class GUI
 local GUI = {}
 setmetatable(GUI, {__index = GUIContainer})
@@ -906,13 +1034,15 @@ function GUI:render()
     self.cache_frame = {}
     self.tooltip = nil
     self.cur_frame = GameGetFrameNum()
+    self.hovered = {}
+    self.callbacks = {}
     local status, err = pcall(function()
         GuiStartFrame(self.handle)
-        self.true_z = self.z
+
         for _, v in ipairs(self.children) do v:_update() end
         for _, v in ipairs(self.children) do v:updatePosition(0, 0, 0) end
-        self.hovered = {}
         for _, v in ipairs(self.children) do v:render() end
+        for _, v in ipairs(self.callbacks) do v.func(v.self) end
         if self.drag_handle then
             self.drag_handle:render_drag()
         elseif self.tooltip then
