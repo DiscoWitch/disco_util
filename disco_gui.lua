@@ -428,8 +428,9 @@ DragContainer.__index = DragContainer
 function DragContainer:_update()
     local mouse = self.root:GetMouse()
     -- If clicked, set variables to start checking for dragging
-    if not self.culled and self.is_hovered and self.root.drag_handle ~= self then
-        if mouse.left_frame == self.root.cur_frame then
+    if not self.culled and self.is_hovered
+        and not (self.root.drag_handle and self.root.drag_handle.is_dragged) then
+        if mouse.left_frame == self.root.now or mouse.right_frame == self.root.now then
             self.root.drag_handle = self
             self.predrag_pos = {x = self.x, y = self.y}
             self.click_pos = {x = mouse.x, y = mouse.y}
@@ -440,7 +441,7 @@ function DragContainer:_update()
     end
     -- Start dragging if the mouse moves while clicking
     if self.root.drag_handle == self and not self.is_dragged then
-        if mouse.left then
+        if mouse.left or mouse.right then
             if (mouse.x - self.click_pos.x) ^ 2 + (mouse.y - self.click_pos.y) ^ 2 > 10 ^ 2 then
                 self.is_dragged = true
             end
@@ -450,7 +451,7 @@ function DragContainer:_update()
     end
 
     -- Stop dragging when mouse is released
-    if not mouse.left then self.is_dragged = false end
+    if not (mouse.left or mouse.right) then self.is_dragged = false end
     GUIContainer._update(self)
 end
 ---@param px number
@@ -1377,7 +1378,6 @@ function GUI:render()
     self.id_counter = 1
     self.cache_frame = {}
     self.tooltip = nil
-    self.cur_frame = GameGetFrameNum()
     self.prev_hovered = self.hovered or {}
     self.hovered = {}
     self.draw_offset = {x = 0, y = 0}
