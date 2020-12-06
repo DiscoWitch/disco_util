@@ -315,17 +315,52 @@ end
 function Entity:applyTorque(tz) PhysicsApplyTorque(self.__id, tz) end
 setmetatable(Entity, Entity.__mt)
 
----@param component_id int
----@param key string
----@return table value
-function GetVec2(component_id, key)
-    local x, y = ComponentGetValue2(component_id, key)
-    return {x = x, y = y}
+---@class Vec2
+Vec2 = {}
+Vec2.__mt = {__tostring = function(self) return "Class: Vec2" end}
+---@param data table
+---@param wrapper function
+---@param args any
+---@return List
+Vec2.__mt.__call = function(self, component_id, name)
+    local output = {component_id = component_id, name = name}
+    setmetatable(output, Vec2)
+    return output
 end
+Vec2.__index = function(self, key)
+    if key == "x" or key == "min" then
+        key = 1
+    elseif key == "y" or key == "max" then
+        key = 2
+    end
+    return self[key]
+end
+Vec2.__newindex = function(table, key, value)
+    if key == "x" or key == "min" then
+        key = 1
+    elseif key == "y" or key == "max" then
+        key = 2
+    end
+    table[key] = value
+end
+Vec2.__tostring = function(self) return "Vector2: (" .. self[1] .. ", " .. self[2] .. ")" end
+
+setmetatable(Vec2, Vec2.__mt)
+
 ---@param component_id int
 ---@param key string
 ---@param value table
-function SetVec2(component_id, key, value) ComponentSetValue2(component_id, key, value.x, value.y) end
+function SetVec2(component_id, key, value)
+    if value[1] then
+        ComponentSetValue2(component_id, key, value[1], value[2])
+    elseif value.x then
+        ComponentSetValue2(component_id, key, value.x, value.y)
+    elseif value.min then
+        ComponentSetValue2(component_id, key, value.min, value.max)
+    else
+        print_error("Invalid Vec2 structure for setter")
+    end
+end
 
 MetaObject = {}
 MetaObject.__mt = {
@@ -343,47 +378,155 @@ MetaObject.__newindex = function(self, key, value)
 end
 setmetatable(MetaObject, MetaObject.__mt)
 
-local comp_getters_special = {
+local component_special_types = {
     AbilityComponent = {gun_config = MetaObject, gunaction_config = MetaObject},
-    AnimalAIComponent = {mHomePosition = SetVec2},
-    CharacterDataComponent = {mVelocity = GetVec2},
+    AdvancedFishAIComponent = {
+        mTargetPos = Vec2,
+        mTargetVec = Vec2,
+        mLastFramesMovementAreaMin = Vec2,
+        mLastFramesMovementAreaMax = Vec2
+    },
+    AnimalAIComponent = {
+        attack_melee_finish_config_explosion = MetaObject,
+        mLastFramesMovementAreaMin = Vec2,
+        mLastFramesMovementAreaMax = Vec2,
+        mNextJumpTarget = Vec2,
+        mHomePosition = Vec2
+    },
+    AreaDamageComponent = {aabb_min = Vec2, aabb_max = Vec2},
+    BossDragonComponent = {mTargetVec = Vec2, mRandomTarget = Vec2, mLastLivingTargetPos = Vec2},
+    CardinalMovementComponent = {mPrevPos = Vec2},
+    CharacterDataComponent = {mVelocity = Vec2},
+    CharacterPlatformingComponent = {mExAnimationPos = Vec2},
+    CharacterStatsComponent = {stats = MetaObject},
+    ConsumableTeleportComponent = {target_location = Vec2},
     ControlsComponent = {
-        mAimingVector = GetVec2,
-        mAimingVectorNormalized = GetVec2,
-        mAimingVectorNonZeroLatest = GetVec2,
-        mGamepadAimingVectorRaw = GetVec2,
-        mJumpVelocity = GetVec2,
-        mMousePosition = GetVec2,
-        mMousePositionRaw = GetVec2,
-        mMousePositionRawPrev = GetVec2,
-        mMouseDelta = GetVec2,
-        mGamepadIndirectAiming = GetVec2
+        mAimingVector = Vec2,
+        mAimingVectorNormalized = Vec2,
+        mAimingVectorNonZeroLatest = Vec2,
+        mGamepadAimingVectorRaw = Vec2,
+        mJumpVelocity = Vec2,
+        mMousePosition = Vec2,
+        mMousePositionRaw = Vec2,
+        mMousePositionRawPrev = Vec2,
+        mMouseDelta = Vec2,
+        mGamepadIndirectAiming = Vec2
     },
-    DamageModelComponent = {damage_multipliers = MetaObject},
-    ItemComponent = {inventory_slot = GetVec2},
+    CrawlerAnimalComponent = {
+        mMin = Vec2,
+        mMax = Vec2,
+        mPrevNonSnappedPosition = Vec2,
+        mPrevCellPosition = Vec2,
+        mPrevCellPosition2 = Vec2,
+        mPrevCellPosition3 = Vec2,
+        mPrevCellPosition4 = Vec2,
+        mPrevCellPosition5 = Vec2,
+        mPrevCellPosition6 = Vec2,
+        mPrevCellPosition7 = Vec2,
+        mPrevCellPosition8 = Vec2,
+        mLatestPosition = Vec2
+    },
+    DamageModelComponent = {damage_multipliers = MetaObject, mPhysicsDamageVecThisFrame = Vec2},
+    DamageNearbyEntitiesComponent = {mVelocity = Vec2},
+    DrugEffectComponent = {drug_fx_target = MetaObject, m_drug_fx_current = MetaObject},
+    DrugEffectModifierComponent = {fx_add = MetaObject, fx_multiply = MetaObject},
+    ElectricityComponent = {mAvgDir = Vec2, mPrevPos = Vec2},
+    EnergyShieldComponent = {mPrevPosition = Vec2},
+    ExplodeOnDamageComponent = {config_explosion = MetaObject},
+    ExplosionComponent = {config_explosion = MetaObject},
+    FishAIComponent = {aabb_min = Vec2, aabb_max = Vec2, velocity = Vec2, mLastCheckPos = Vec2},
+    GhostComponent = {velocity = Vec2, mTargetPosition = Vec2, mRandomTarget = Vec2},
+    HitboxComponent = {offset = Vec2},
+    HotspotComponent = {offset = Vec2},
+    IKLimbAttackerComponent = {mTarget = Vec2},
+    IKLimbComponent = {
+        end_position = Vec2,
+        mJointWorldPos = Vec2,
+        mPart0PrevPos = Vec2,
+        mPart1PrevPos = Vec2
+    },
+    IKLimbWalkerComponent = {mTarget = Vec2, mPrevTarget = Vec2, mPrevCenterPosition = Vec2},
+    IKLimbsAnimatorComponent = {mPrevBodyPosition = Vec2},
+    InheritTransformComponent = {Transform = MetaObject},
+    Inventory2Component = {mSmoothedItemAngleVec = Vec2},
+    InventoryComponent = {
+        ui_container_size = Vec2,
+        ui_element_size = Vec2,
+        ui_position_on_screen = Vec2
+    },
+    InventoryGuiComponent = {},
+    ItemComponent = {spawn_pos = Vec2, inventory_slot = Vec2},
+    ItemPickUpperComponent = {mLatestItemOverlapInfoBoxPosition = Vec2},
     LaserEmitterComponent = {laser = MetaObject},
+    LifetimeComponent = {randomize_lifetime = Vec2},
+    LightningComponent = {config_explosion = MetaObject, mExPosition = Vec2},
+    LoadEntitiesComponent = {count = Vec2},
+    MaterialAreaCheckerComponent = {area_aabb = MetaObject},
+    -- MaterialInventoryComponent = {count_per_material_type = MATERIAL_VEC_DOUBLES},
+    MaterialSeaSpawnerComponent = {size = Vec2, offset = Vec2},
+    MaterialSuckerComponent = {randomized_position = MetaObject},
     ParticleEmitterComponent = {
-        mExPosition = GetVec2,
-        offset = GetVec2,
-        gravity = GetVec2,
-        area_circle_radius = GetVec2
+        offset = Vec2,
+        area_circle_radius = Vec2,
+        gravity = Vec2,
+        mExPosition = Vec2,
+        m_last_emit_position = Vec2
     },
-    PhysicsBody2Component = {mLocalPosition = GetVec2},
-    ProjectileComponent = {config_explosion = MetaObject},
-    VelocityComponent = {mVelocity = GetVec2}
-}
-
-local comp_setters_special = {
-    AnimalAIComponent = {mHomePosition = SetVec2},
-    CharacterDataComponent = {mVelocity = SetVec2},
-    ItemComponent = {inventory_slot = SetVec2},
-    ParticleEmitterComponent = {
-        mExPosition = SetVec2,
-        offset = SetVec2,
-        gravity = SetVec2,
-        area_circle_radius = SetVec2
+    PathFindingComponent = {path_next_node_vector_to = Vec2},
+    PhysicsAIComponent = {mLastPositionWhenHadPath = Vec2},
+    PhysicsBody2Component = {mLocalPosition = Vec2},
+    PhysicsBodyComponent = {initial_velocity = Vec2, mLocalPosition = Vec2},
+    PhysicsPickUpComponent = {
+        transform = MetaObject,
+        original_left_joint_pos = Vec2,
+        original_right_joint_pos = Vec2,
+        leftJointPos = Vec2,
+        rightJointPos = Vec2
     },
-    VelocityComponent = {mVelocity = SetVec2}
+    PlatformShooterPlayerComponent = {
+        eating_area_min = Vec2,
+        eating_area_max = Vec2,
+        mSmoothedCameraPosition = Vec2,
+        mSmoothedAimingVector = Vec2,
+        mDesiredCameraPos = Vec2
+    },
+    PressurePlateComponent = {aabb_min = Vec2, aabb_max = Vec2},
+    ProjectileComponent = {
+        config = MetaObject,
+        config_explosion = MetaObject,
+        damage_by_type = MetaObject,
+        damage_critical = MetaObject,
+        shell_casing_offset = Vec2
+    },
+    SetLightAlphaFromVelocityComponent = {mPrevPosition = Vec2},
+    SetStartVelocityComponent = {velocity = Vec2, randomize_angle = Vec2, randomize_speed = Vec2},
+    SimplePhysicsComponent = {mOldPosition = Vec2},
+    SpriteComponent = {transform_offset = Vec2, offset_animator_offset = Vec2},
+    SpriteParticleEmitterComponent = {
+        -- color = fcolor,
+        -- color_change = fcolor,
+        velocity = Vec2,
+        gravity = Vec2,
+        scale = Vec2,
+        scale_velocity = Vec2,
+        randomize_lifetime = Vec2,
+        randomize_position = MetaObject,
+        randomize_velocity = MetaObject,
+        randomize_scale = MetaObject,
+        randomize_rotation = Vec2,
+        randomize_angular_velocity = Vec2,
+        randomize_alpha = Vec2,
+        randomize_animation_speed_coeff = Vec2,
+        expand_randomize_position = Vec2
+    },
+    TeleportComponent = {target = Vec2, source_location_camera_aabb = MetaObject},
+    VelocityComponent = {mVelocity = Vec2, mPrevVelocity = Vec2, mPrevPosition = Vec2},
+    VerletPhysicsComponent = {animation_target_offset = Vec2, m_position_previous = Vec2},
+    VerletWorldJointComponent = {world_position = Vec2},
+    WorldStateComponent = {player_spawn_location = Vec2},
+    WormAIComponent = {mRandomTarget = Vec2},
+    WormComponent = {mTargetVec = Vec2, mTargetPosition = Vec2},
+    WormPlayerComponent = {mPrevPosition = Vec2, mDirection = Vec2}
 }
 
 ---@class Component
@@ -407,16 +550,16 @@ Component.__index = function(self, key)
         print_error("Illegal Component ID")
         return 0
     end
-    if comp_getters_special[self:type()] and comp_getters_special[self:type()][key] then
-        return comp_getters_special[self:type()][key](self.__id, key)
+    if component_special_types[self:type()] and component_special_types[self:type()][key] then
+        return component_special_types[self:type()][key](self.__id, key)
     else
         return ComponentGetValue2(self.__id, key)
     end
 end
 Component.__newindex = function(self, key, value)
     if key == "__id" then
-    elseif comp_setters_special[self:type()] and comp_setters_special[self:type()][key] then
-        comp_setters_special[self:type()][key](self.__id, key, value)
+    elseif component_special_types[self:type()] and component_special_types[self:type()][key] == Vec2 then
+        SetVec2(self.__id, key, value)
     else
         ComponentSetValue2(self.__id, key, value)
     end
