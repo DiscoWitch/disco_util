@@ -1,3 +1,9 @@
+if DebugGetIsDevBuild() then
+    function Dprint(...) print(...) end
+else
+    function Dprint() end
+end
+
 ---@class List
 List = {}
 List.__mt = {__tostring = function(self) return "Class: List" end}
@@ -323,25 +329,25 @@ Vec2.__mt = {__tostring = function(self) return "Class: Vec2" end}
 ---@param args any
 ---@return List
 Vec2.__mt.__call = function(self, component_id, name)
-    local output = {component_id = component_id, name = name}
+    local x, y = ComponentGetValue2(component_id, name)
+    local output = {x, y}
     setmetatable(output, Vec2)
     return output
 end
 Vec2.__index = function(self, key)
     if key == "x" or key == "min" then
-        key = 1
+        return self[1]
     elseif key == "y" or key == "max" then
-        key = 2
+        return self[2]
     end
-    return self[key]
+    return nil
 end
-Vec2.__newindex = function(table, key, value)
+Vec2.__newindex = function(self, key, value)
     if key == "x" or key == "min" then
-        key = 1
+        self[1] = value
     elseif key == "y" or key == "max" then
-        key = 2
+        self[2] = value
     end
-    table[key] = value
 end
 Vec2.__tostring = function(self) return "Vector2: (" .. self[1] .. ", " .. self[2] .. ")" end
 
